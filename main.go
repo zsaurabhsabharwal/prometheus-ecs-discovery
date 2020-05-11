@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"math/rand"
 	"strconv"
 	"strings"
 	"time"
@@ -63,6 +64,7 @@ var prometheusServerNameLabel = flag.String("config.server-name-label", "PROMETH
 var prometheusJobNameLabel = flag.String("config.job-name-label", "PROMETHEUS_EXPORTER_JOB_NAME", "Docker label to define the job name")
 var prometheusDynamicPortDetection = flag.Bool("config.dynamic-port-detection", false, fmt.Sprintf("If true, only tasks with the Docker label %s=1 will be scraped", dynamicPortLabel))
 var prometheusCustomLabelPrefix = flag.String("config.custom_label_prefix", "PROMETHEUS_EXPORTER_CUSTOM_LABEL_", "Prefix of custom docker labels")
+var prometheusShardCountMapping flagMapping
 
 // logError is a convenience function that decodes all possible ECS
 // errors and displays them to standard error.
@@ -307,7 +309,13 @@ func (t *AugmentedTask) ExporterInformation() []*PrometheusTaskInfo {
 			}
 
 			if k == "PROMETHEUS_SHARD_IDENTIFIER" {
-				filename := v + ".yml"
+				filename := ""
+				// if the shard count mapping is defined create that many shard files
+				if count, ok := prometheusShardCountMapping[v]; ok {
+					filename = fmt.Sprintf("%s_shard_%d.yml", v, rand.Intn(int(count)))
+				} else {
+					filename = fmt.Sprintf("%s.yml", v)
+				}
 				configFile = &filename
 			}
 		}
@@ -638,6 +646,7 @@ func GetAugmentedTasks(svc *ecs.ECS, svcec2 *ec2.EC2, clusterArns []*string) ([]
 }
 
 func main() {
+	flag.Var(&prometheusShardCountMapping, "shard-count", "provide a shard count mapping ex: -shard-count <shard_name>=<shard_count>")
 	flag.Parse()
 
 	config, err := external.LoadDefaultAWSConfig()

@@ -1,0 +1,16 @@
+version: "3.3"
+services:
+  prometheus-ecs-discovery:
+    build: .
+    environment:
+      - AWS_REGION=ap-southeast-1
+      - DISC_CONFIG_SCRAPE-INTERVAL=2m
+      - DISC_CONFIG_WRITE-TO=ecs_file_sd.yml
+      - DISC_CONFIG_WRITE-TO-DIR=/
+      - AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
+      - AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+      - AWS_SESSION_TOKEN=big-dump-session-token
+      - AWS_DEFAULT_REGION=ap-southeast-1
+    command:
+      - "-shard-count"
+      - "cadvisor-ecs-monitoring=3"

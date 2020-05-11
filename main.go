@@ -64,7 +64,7 @@ var prometheusServerNameLabel = flag.String("config.server-name-label", "PROMETH
 var prometheusJobNameLabel = flag.String("config.job-name-label", "PROMETHEUS_EXPORTER_JOB_NAME", "Docker label to define the job name")
 var prometheusDynamicPortDetection = flag.Bool("config.dynamic-port-detection", false, fmt.Sprintf("If true, only tasks with the Docker label %s=1 will be scraped", dynamicPortLabel))
 var prometheusCustomLabelPrefix = flag.String("config.custom_label_prefix", "PROMETHEUS_EXPORTER_CUSTOM_LABEL_", "Prefix of custom docker labels")
-var prometheusShardCountMapping flagMapping
+var prometheusShardCountMapping = flagMapping{}
 
 // logError is a convenience function that decodes all possible ECS
 // errors and displays them to standard error.

@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
-	"math/rand"
 	"strconv"
 	"strings"
 	"time"
@@ -312,7 +311,7 @@ func (t *AugmentedTask) ExporterInformation() []*PrometheusTaskInfo {
 				filename := ""
 				// if the shard count mapping is defined create that many shard files
 				if count, ok := prometheusShardCountMapping[v]; ok {
-					filename = fmt.Sprintf("%s_shard_%d.yml", v, rand.Intn(int(count)))
+					filename = fmt.Sprintf("%s_shard_%d.yml", v, hash(*t.TaskArn, count))
 				} else {
 					filename = fmt.Sprintf("%s.yml", v)
 				}

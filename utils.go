@@ -28,7 +28,6 @@ func (f *flagMapping) Set(v string) error {
 	return nil
 }
 
-
 func hash(s string, n uint8) uint8 {
 	h := fnv.New64a()
 	_, err := h.Write([]byte(s))
@@ -37,4 +36,13 @@ func hash(s string, n uint8) uint8 {
 		return 0
 	}
 	return uint8(h.Sum64() % uint64(n))
+}
+
+func Find(slice []int64, val int64) (int, bool) {
+	for i, item := range slice {
+		if item == val {
+			return i, true
+		}
+	}
+	return -1, false
 }

@@ -56,7 +56,7 @@ var outFile = flag.String("config.write-to", "ecs_file_sd.yml", "name of file to
 var interval = flag.Duration("config.scrape-interval", 60*time.Second, "interval at which to scrape the AWS API for ECS service discovery information")
 var times = flag.Int("config.scrape-times", 0, "how many times to scrape before exiting (0 = infinite)")
 var roleArn = flag.String("config.role-arn", "", "ARN of the role to assume when scraping the AWS API (optional)")
-var prometheusPortLabel = flag.String("config.port-label", "PROMETHEUS_EXPORTER_PORT", "Docker label to define the scrape port of the application (if missing an application won't be scraped)")
+var prometheusPortLabel = flag.String("config.port-label", "PROMETHEUS_EXPORTER_PORT", "Docker label to define the scrape port of the application (if missing an application won't be scraped), allowed comma separated ports")
 var prometheusPathLabel = flag.String("config.path-label", "PROMETHEUS_EXPORTER_PATH", "Docker label to define the scrape path of the application")
 var prometheusFilterLabel = flag.String("config.filter-label", "", "Docker label (and optionally value) to require to scrape the application")
 var prometheusServerNameLabel = flag.String("config.server-name-label", "PROMETHEUS_EXPORTER_SERVER_NAME", "Docker label to define the server name")
@@ -221,7 +221,7 @@ func (t *AugmentedTask) ExporterInformation() []*PrometheusTaskInfo {
 			continue
 		}
 
-		var hostPort int64
+		var hostPorts []int64
 		if *prometheusDynamicPortDetection {
 			v, ok := d.DockerLabels[dynamicPortLabel]
 			if !ok || v != "1" {
@@ -237,7 +237,7 @@ func (t *AugmentedTask) ExporterInformation() []*PrometheusTaskInfo {
 			}
 
 			if port := i.NetworkBindings[0].HostPort; port != nil {
-				hostPort = *port
+				hostPorts = append(hostPorts, *port)
 			}
 		} else {
 			v, ok := d.DockerLabels[*prometheusPortLabel]
@@ -259,9 +259,21 @@ func (t *AugmentedTask) ExporterInformation() []*PrometheusTaskInfo {
 				}
 			}
 
-			var exporterPort int
+			var exporterPorts []int64
 			var err error
-			if exporterPort, err = strconv.Atoi(v); err != nil || exporterPort < 0 {
+
+			portsArr := strings.Split(v, ",")
+			for _, p := range portsArr {
+				var pInt int
+				pInt, err = strconv.Atoi(p)
+				if err != nil {
+					break
+				} else if pInt >= 0 {
+					exporterPorts = append(exporterPorts, int64(pInt))
+				}
+			}
+
+			if err != nil || len(exporterPorts) == 0 {
 				// This container has an invalid port definition.
 				// This container is no good.  We continue.
 				continue
@@ -269,8 +281,8 @@ func (t *AugmentedTask) ExporterInformation() []*PrometheusTaskInfo {
 
 			if len(i.NetworkBindings) > 0 {
 				for _, nb := range i.NetworkBindings {
-					if int(*nb.ContainerPort) == exporterPort {
-						hostPort = *nb.HostPort
+					if _, found := Find(exporterPorts, *nb.ContainerPort); found {
+						hostPorts = append(hostPorts, *nb.HostPort)
 					}
 				}
 			} else {
@@ -279,7 +291,7 @@ func (t *AugmentedTask) ExporterInformation() []*PrometheusTaskInfo {
 						ip = *ni.PrivateIpv4Address
 					}
 				}
-				hostPort = int64(exporterPort)
+				hostPorts = append(hostPorts, exporterPorts...)
 			}
 		}
 
@@ -337,8 +349,13 @@ func (t *AugmentedTask) ExporterInformation() []*PrometheusTaskInfo {
 			labels.MetricsPath = exporterPath
 		}
 
+		var targets []string
+		for _, p := range hostPorts {
+			targets = append(targets, fmt.Sprintf("%s:%d", host, p))
+		}
+
 		ret = append(ret, &PrometheusTaskInfo{
-			Targets:    []string{fmt.Sprintf("%s:%d", host, hostPort)},
+			Targets:    targets,
 			Labels:     labels,
 			ConfigFile: configFile,
 		})

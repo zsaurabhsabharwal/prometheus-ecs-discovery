@@ -19,7 +19,7 @@ import (
 	"flag"
 	"fmt"
 	"io/ioutil"
-	"log"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -31,6 +31,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/go-yaml/yaml"
+	"github.com/sirupsen/logrus"
 )
 
 type labels struct {
@@ -50,6 +51,7 @@ type labels struct {
 // Docker label for enabling dynamic port detection
 const dynamicPortLabel = "PROMETHEUS_DYNAMIC_EXPORT"
 
+var verbosity = flag.Int("config.verbose", 0, "verbosity level for the application")
 var cluster = flag.String("config.cluster", "", "name of the cluster to scrape")
 var outDir = flag.String("config.write-to-dir", "/prometheus", "path of dir to write config file to")
 var outFile = flag.String("config.write-to", "ecs_file_sd.yml", "name of file to write ECS service discovery information to")
@@ -65,6 +67,8 @@ var prometheusDynamicPortDetection = flag.Bool("config.dynamic-port-detection", 
 var prometheusCustomLabelPrefix = flag.String("config.custom_label_prefix", "PROMETHEUS_EXPORTER_CUSTOM_LABEL_", "Prefix of custom docker labels")
 var prometheusShardCountMapping = flagMapping{}
 
+var log *logrus.Entry
+
 // logError is a convenience function that decodes all possible ECS
 // errors and displays them to standard error.
 func logError(err error) {
@@ -74,18 +78,26 @@ func logError(err error) {
 			// Message from an error.
 			switch aerr.Code() {
 			case ecs.ErrCodeServerException:
-				log.Println(ecs.ErrCodeServerException, aerr.Error())
+				log.WithFields(logrus.Fields{
+					"err": ecs.ErrCodeServerException,
+				}).Error(aerr.Error())
 			case ecs.ErrCodeClientException:
-				log.Println(ecs.ErrCodeClientException, aerr.Error())
+				log.WithFields(logrus.Fields{
+					"err": ecs.ErrCodeClientException,
+				}).Error(aerr.Error())
 			case ecs.ErrCodeInvalidParameterException:
-				log.Println(ecs.ErrCodeInvalidParameterException, aerr.Error())
+				log.WithFields(logrus.Fields{
+					"err": ecs.ErrCodeInvalidParameterException,
+				}).Error(aerr.Error())
 			case ecs.ErrCodeClusterNotFoundException:
-				log.Println(ecs.ErrCodeClusterNotFoundException, aerr.Error())
+				log.WithFields(logrus.Fields{
+					"err": ecs.ErrCodeClusterNotFoundException,
+				}).Error(aerr.Error())
 			default:
-				log.Println(aerr.Error())
+				log.Error(aerr.Error())
 			}
 		} else {
-			log.Println(err.Error())
+			log.Error(err.Error())
 		}
 	}
 }
@@ -175,6 +187,11 @@ func GetCustomLabel(v string) (string, string, error) {
 }
 
 func (t *AugmentedTask) ExporterInformation() []*PrometheusTaskInfo {
+	logTask := log.WithFields(logrus.Fields{
+		"taskGroup": *t.Group,
+		"taskArn": *t.TaskArn,
+	})
+
 	ret := []*PrometheusTaskInfo{}
 
 	var host string
@@ -182,21 +199,21 @@ func (t *AugmentedTask) ExporterInformation() []*PrometheusTaskInfo {
 
 	if t.LaunchType != ecs.LaunchTypeFargate {
 		if t.EC2Instance == nil {
+			logTask.Warn("task does not have ec2 instance information")
 			return ret
 		}
 		if len(t.EC2Instance.NetworkInterfaces) == 0 {
+			logTask.Warn("task ec2 instance does not have any assosciated network interfaces")
 			return ret
 		}
 
-		for _, iface := range t.EC2Instance.NetworkInterfaces {
-			if iface.PrivateIpAddress != nil && *iface.PrivateIpAddress != "" &&
-				iface.PrivateDnsName != nil && *iface.PrivateDnsName != "" &&
-				*iface.PrivateDnsName == *t.EC2Instance.PrivateDnsName {
-				ip = *iface.PrivateIpAddress
-				break
-			}
-		}
+		logTask.WithFields(logrus.Fields{
+			"ipaddress": *t.EC2Instance.PrivateIpAddress,
+		}).Debug("host ec2 network ip address")
+		ip = *t.EC2Instance.PrivateIpAddress
+
 		if ip == "" {
+			logTask.Warn("task ip is empty")
 			return ret
 		}
 	}
@@ -207,6 +224,9 @@ func (t *AugmentedTask) ExporterInformation() []*PrometheusTaskInfo {
 	}
 
 	for _, i := range t.Containers {
+		logContainer := logTask.WithFields(logrus.Fields{
+			"container": *i.Name,
+		})
 		// Let's go over the containers to see which ones are defined
 		var d ecs.ContainerDefinition
 		for _, d = range t.TaskDefinition.ContainerDefinitions {
@@ -218,15 +238,18 @@ func (t *AugmentedTask) ExporterInformation() []*PrometheusTaskInfo {
 		}
 		if *i.Name != *d.Name && t.LaunchType != ecs.LaunchTypeFargate {
 			// Nope, no match, this container cannot be exported.  We continue.
+			logContainer.Debug("container did not match")
 			continue
 		}
 
 		var hostPorts []int64
 		if *prometheusDynamicPortDetection {
+			logContainer.Trace("prometheus dynamic port detection enabled")
 			v, ok := d.DockerLabels[dynamicPortLabel]
 			if !ok || v != "1" {
 				// Nope, no Prometheus-exported port in this container def.
 				// This container is no good. We continue.
+				logContainer.Debug("container did not export prometheus port")
 				continue
 			}
 
@@ -244,6 +267,7 @@ func (t *AugmentedTask) ExporterInformation() []*PrometheusTaskInfo {
 			if !ok {
 				// Nope, no Prometheus-exported port in this container def.
 				// This container is no good.  We continue.
+				logContainer.Debug("container did not export prometheus port")
 				continue
 			}
 
@@ -251,10 +275,16 @@ func (t *AugmentedTask) ExporterInformation() []*PrometheusTaskInfo {
 				v, ok := d.DockerLabels[filter[0]]
 				if !ok {
 					// Nope, the filter label isn't present.
+					logContainer.WithFields(logrus.Fields{
+						"label": filter[0],
+					}).Debug("container filter label not found")
 					continue
 				}
 				if len(filter) == 2 && v != filter[1] {
 					// Nope, the filter label value doesn't match.
+					logContainer.WithFields(logrus.Fields{
+						"label": filter[0],
+					}).Debug("container filter label value does not match")
 					continue
 				}
 			}
@@ -276,6 +306,7 @@ func (t *AugmentedTask) ExporterInformation() []*PrometheusTaskInfo {
 			if err != nil || len(exporterPorts) == 0 {
 				// This container has an invalid port definition.
 				// This container is no good.  We continue.
+				logContainer.Debug("container has no or invalid exported ports")
 				continue
 			}
 
@@ -359,6 +390,10 @@ func (t *AugmentedTask) ExporterInformation() []*PrometheusTaskInfo {
 			Labels:     labels,
 			ConfigFile: configFile,
 		})
+
+		logContainer.WithFields(logrus.Fields{
+			"meta": ret,
+		}).Trace("container meta information")
 	}
 
 	return ret
@@ -402,7 +437,7 @@ func AddTaskDefinitionsOfTasks(svc *ecs.ECS, taskList []*AugmentedTask) ([]*Augm
 		result := <-results
 		if result.err != nil {
 			err = result.err
-			log.Printf("Error describing task definition: %s", err)
+			log.Errorf("Error describing task definition: %s", err)
 		} else {
 			task2def[*result.out.TaskDefinition.TaskDefinitionArn] = result.out.TaskDefinition
 		}
@@ -462,7 +497,7 @@ func DescribeInstancesUnpaginated(svc *ec2.EC2, instanceIds []string) ([]ec2.Ins
 			if err != nil {
 				return nil, err
 			}
-			log.Printf("Described %d EC2 reservations", len(output.Reservations))
+			log.Infof("Described %d EC2 reservations", len(output.Reservations))
 			finalOutput.Reservations = append(finalOutput.Reservations, output.Reservations...)
 			if output.NextToken == nil {
 				break
@@ -513,7 +548,7 @@ func AddContainerInstancesToTasks(svc *ecs.ECS, svcec2 *ec2.EC2, taskList []*Aug
 			}
 
 			if len(output.Failures) > 0 {
-				log.Printf("Described %d failures in cluster %s", len(output.Failures), clusterArn)
+				log.Infof("Described %d failures in cluster %s", len(output.Failures), clusterArn)
 			}
 			for _, ci := range output.ContainerInstances {
 				cInst := ci
@@ -545,12 +580,12 @@ func AddContainerInstancesToTasks(svc *ecs.ECS, svcec2 *ec2.EC2, taskList []*Aug
 		if task.ContainerInstanceArn != nil {
 			containerInstance, ok := clusterArnToContainerInstancesArns[*task.ClusterArn][*task.ContainerInstanceArn]
 			if !ok {
-				log.Printf("Cannot find container instance %s in cluster %s", *task.ContainerInstanceArn, *task.ClusterArn)
+				log.Infof("Cannot find container instance %s in cluster %s", *task.ContainerInstanceArn, *task.ClusterArn)
 				continue
 			}
 			instance, ok := instanceIDToEC2Instance[*containerInstance.Ec2InstanceId]
 			if !ok {
-				log.Printf("Cannot find EC2 instance %s", *containerInstance.Ec2InstanceId)
+				log.Infof("Cannot find EC2 instance %s", *containerInstance.Ec2InstanceId)
 				continue
 			}
 			task.EC2Instance = instance
@@ -581,13 +616,13 @@ func GetTasksOfClusters(svc *ecs.ECS, svcec2 *ec2.EC2, clusterArns []*string) ([
 					output, err1 := req.Send()
 					if err1 != nil {
 						err = err1
-						log.Printf("Error listing tasks of cluster %s: %s", *clusterArn, err)
+						log.Errorf("Error listing tasks of cluster %s: %s", *clusterArn, err)
 						break
 					}
 					if len(output.TaskArns) == 0 {
 						break
 					}
-					log.Printf("Inspected cluster %s, found %d tasks", *clusterArn, len(output.TaskArns))
+					log.Infof("Inspected cluster %s, found %d tasks", *clusterArn, len(output.TaskArns))
 					reqDescribe := svc.DescribeTasksRequest(&ecs.DescribeTasksInput{
 						Cluster: clusterArn,
 						Tasks:   output.TaskArns,
@@ -595,12 +630,12 @@ func GetTasksOfClusters(svc *ecs.ECS, svcec2 *ec2.EC2, clusterArns []*string) ([
 					descOutput, err2 := reqDescribe.Send()
 					if err2 != nil {
 						err = err2
-						log.Printf("Error describing tasks of cluster %s: %s", *clusterArn, err)
+						log.Errorf("Error describing tasks of cluster %s: %s", *clusterArn, err)
 						break
 					}
-					log.Printf("Described %d tasks in cluster %s", len(descOutput.Tasks), *clusterArn)
+					log.Infof("Described %d tasks in cluster %s", len(descOutput.Tasks), *clusterArn)
 					if len(descOutput.Failures) > 0 {
-						log.Printf("Described %d failures in cluster %s", len(descOutput.Failures), *clusterArn)
+						log.Errorf("Described %d failures in cluster %s", len(descOutput.Failures), *clusterArn)
 					}
 					finalOutput.Tasks = append(finalOutput.Tasks, descOutput.Tasks...)
 					finalOutput.Failures = append(finalOutput.Failures, descOutput.Failures...)
@@ -665,6 +700,22 @@ func main() {
 	flag.Var(&prometheusShardCountMapping, "shard-count", "provide a shard count mapping ex: -shard-count <shard_name>=<shard_count>")
 	flag.Parse()
 
+	// DISC_CONFIG_ROLE-ARN - arn:aws:iam::xxxxxxxxxxx:role/role-name
+	accountID := (strings.Split(*roleArn, ":"))[4]
+
+	logger := logrus.New()
+	logger.SetFormatter(&logrus.JSONFormatter{})
+	logger.SetOutput(os.Stdout)
+	logger.SetLevel(logrus.Level(*verbosity + 2)) // Adding +2 here to skip panic and fatal level in logrus library
+
+	log = logger.WithFields(logrus.Fields{
+		"application": "prometheus-ecs-discovery",
+		"region": os.Getenv("AWS_REGION"),
+		"accountID": accountID,
+	})
+
+	logger.Info("starting ecs discovery...")
+
 	config, err := external.LoadDefaultAWSConfig()
 	if err != nil {
 		logError(err)
@@ -723,6 +774,9 @@ func main() {
 		filenameInfosMapping := map[string][]*PrometheusTaskInfo{}
 
 		for _, t := range tasks {
+			logger.WithFields(logrus.Fields{
+				"taskObj": *t,
+			}).Trace("exporting task information")
 			infoList := t.ExporterInformation()
 
 			for _, info := range infoList {
@@ -734,6 +788,9 @@ func main() {
 			}
 		}
 
+		if len(filenameInfosMapping) == 0 {
+			logger.Trace("no filename info mapping found")
+		}
 		// Write content in the respective files
 		for configFile, content := range filenameInfosMapping {
 			m, err := yaml.Marshal(content)
@@ -741,7 +798,7 @@ func main() {
 				logError(err)
 				return
 			}
-			log.Printf("Writing %d discovered exporters to %s", len(content), configFile)
+			log.Infof("Writing %d discovered exporters to %s", len(content), configFile)
 			err = ioutil.WriteFile(strings.TrimRight(*outDir, "/")+"/"+strings.TrimLeft(configFile, "/"), m, 0644)
 			if err != nil {
 				logError(err)

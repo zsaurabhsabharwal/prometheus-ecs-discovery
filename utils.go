@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"hash/fnv"
-	"log"
 	"strconv"
 	"strings"
 )
@@ -32,7 +31,7 @@ func hash(s string, n uint8) uint8 {
 	h := fnv.New64a()
 	_, err := h.Write([]byte(s))
 	if err != nil {
-		log.Printf("unable to hash the string %s - %d", s, n)
+		log.Warnf("unable to hash the string %s - %d", s, n)
 		return 0
 	}
 	return uint8(h.Sum64() % uint64(n))

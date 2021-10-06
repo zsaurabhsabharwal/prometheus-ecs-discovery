@@ -34,17 +34,19 @@ import (
 )
 
 type labels struct {
-	TaskArn       string            `yaml:"task_arn"`
-	TaskName      string            `yaml:"task_name"`
-	JobName       string            `yaml:"job,omitempty"`
-	TaskRevision  string            `yaml:"task_revision"`
-	TaskGroup     string            `yaml:"task_group"`
-	ClusterArn    string            `yaml:"cluster_arn"`
-	ContainerName string            `yaml:"container_name"`
-	ContainerArn  string            `yaml:"container_arn"`
-	DockerImage   string            `yaml:"docker_image"`
-	MetricsPath   string            `yaml:"__metrics_path__,omitempty"`
-	CustomLabels  map[string]string `yaml:",inline,omitempty"`
+	TaskArn           string            `yaml:"task_arn"`
+	TaskName          string            `yaml:"task_name"`
+	JobName           string            `yaml:"job,omitempty"`
+	TaskRevision      string            `yaml:"task_revision"`
+	TaskGroup         string            `yaml:"task_group"`
+	ClusterArn        string            `yaml:"cluster_arn"`
+	ContainerName     string            `yaml:"container_name"`
+	ContainerArn      string            `yaml:"container_arn"`
+	DockerImage       string            `yaml:"docker_image"`
+	AvailabilityZone  string            `yaml:"availability_zone"`
+	InstancePrivateIP string            `yaml:"instance_private_ip"`
+	MetricsPath       string            `yaml:"__metrics_path__,omitempty"`
+	CustomLabels      map[string]string `yaml:",inline,omitempty"`
 }
 
 // Docker label for enabling dynamic port detection
@@ -331,22 +333,24 @@ func (t *AugmentedTask) ExporterInformation() []*PrometheusTaskInfo {
 			}
 		}
 
-		labels := labels{
-			TaskArn:       *t.TaskArn,
-			TaskName:      *t.TaskDefinition.Family,
-			JobName:       d.DockerLabels[*prometheusJobNameLabel],
-			TaskRevision:  fmt.Sprintf("%d", *t.TaskDefinition.Revision),
-			TaskGroup:     *t.Group,
-			ClusterArn:    *t.ClusterArn,
-			ContainerName: *i.Name,
-			ContainerArn:  *i.ContainerArn,
-			DockerImage:   *d.Image,
-			CustomLabels:  m,
+		l := labels{
+			TaskArn:           *t.TaskArn,
+			TaskName:          *t.TaskDefinition.Family,
+			JobName:           d.DockerLabels[*prometheusJobNameLabel],
+			TaskRevision:      fmt.Sprintf("%d", *t.TaskDefinition.Revision),
+			TaskGroup:         *t.Group,
+			ClusterArn:        *t.ClusterArn,
+			ContainerName:     *i.Name,
+			ContainerArn:      *i.ContainerArn,
+			DockerImage:       *d.Image,
+			InstancePrivateIP: *t.EC2Instance.PrivateIpAddress,
+			AvailabilityZone:  *t.EC2Instance.Placement.AvailabilityZone,
+			CustomLabels:      m,
 		}
 
 		exporterPath, ok = d.DockerLabels[*prometheusPathLabel]
 		if ok {
-			labels.MetricsPath = exporterPath
+			l.MetricsPath = exporterPath
 		}
 
 		var targets []string
@@ -356,7 +360,7 @@ func (t *AugmentedTask) ExporterInformation() []*PrometheusTaskInfo {
 
 		ret = append(ret, &PrometheusTaskInfo{
 			Targets:    targets,
-			Labels:     labels,
+			Labels:     l,
 			ConfigFile: configFile,
 		})
 	}
@@ -472,9 +476,7 @@ func DescribeInstancesUnpaginated(svc *ec2.EC2, instanceIds []string) ([]ec2.Ins
 	}
 	result := []ec2.Instance{}
 	for _, rsv := range finalOutput.Reservations {
-		for _, i := range rsv.Instances {
-			result = append(result, i)
-		}
+		result = append(result, rsv.Instances...)
 	}
 	return result, nil
 }
@@ -628,9 +630,7 @@ func GetTasksOfClusters(svc *ecs.ECS, svcec2 *ec2.EC2, clusterArns []*string) ([
 		if result.err != nil {
 			return nil, result.err
 		}
-		for _, task := range result.out.Tasks {
-			tasks = append(tasks, task)
-		}
+		tasks = append(tasks, result.out.Tasks...)
 	}
 
 	return tasks, nil

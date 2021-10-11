@@ -333,6 +333,16 @@ func (t *AugmentedTask) ExporterInformation() []*PrometheusTaskInfo {
 			}
 		}
 
+		privateIpAddress := ""
+		if t.EC2Instance != nil && t.EC2Instance.PrivateIpAddress != nil {
+			privateIpAddress = *t.EC2Instance.PrivateIpAddress
+		}
+
+		availabilityZone := ""
+		if t.EC2Instance != nil && t.EC2Instance.Placement != nil && t.EC2Instance.Placement.AvailabilityZone != nil {
+			availabilityZone = *t.EC2Instance.Placement.AvailabilityZone
+		}
+
 		l := labels{
 			TaskArn:           *t.TaskArn,
 			TaskName:          *t.TaskDefinition.Family,
@@ -343,8 +353,8 @@ func (t *AugmentedTask) ExporterInformation() []*PrometheusTaskInfo {
 			ContainerName:     *i.Name,
 			ContainerArn:      *i.ContainerArn,
 			DockerImage:       *d.Image,
-			InstancePrivateIP: *t.EC2Instance.PrivateIpAddress,
-			AvailabilityZone:  *t.EC2Instance.Placement.AvailabilityZone,
+			InstancePrivateIP: privateIpAddress,
+			AvailabilityZone:  availabilityZone,
 			CustomLabels:      m,
 		}
 

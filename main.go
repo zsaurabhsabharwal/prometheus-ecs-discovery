@@ -34,19 +34,19 @@ import (
 )
 
 type labels struct {
-	TaskArn           string            `yaml:"task_arn"`
-	TaskName          string            `yaml:"task_name"`
-	JobName           string            `yaml:"job,omitempty"`
-	TaskRevision      string            `yaml:"task_revision"`
-	TaskGroup         string            `yaml:"task_group"`
-	ClusterArn        string            `yaml:"cluster_arn"`
-	ContainerName     string            `yaml:"container_name"`
-	ContainerArn      string            `yaml:"container_arn"`
-	DockerImage       string            `yaml:"docker_image"`
-	AvailabilityZone  string            `yaml:"availability_zone"`
-	InstancePrivateIP string            `yaml:"instance_private_ip"`
-	MetricsPath       string            `yaml:"__metrics_path__,omitempty"`
-	CustomLabels      map[string]string `yaml:",inline,omitempty"`
+	TaskArn                    string            `yaml:"task_arn"`
+	TaskName                   string            `yaml:"task_name"`
+	JobName                    string            `yaml:"job,omitempty"`
+	TaskRevision               string            `yaml:"task_revision"`
+	TaskGroup                  string            `yaml:"task_group"`
+	ClusterArn                 string            `yaml:"cluster_arn"`
+	ContainerName              string            `yaml:"container_name"`
+	ContainerArn               string            `yaml:"container_arn"`
+	DockerImage                string            `yaml:"docker_image"`
+	AvailabilityZone           string            `yaml:"availability_zone"`
+	ContainerInstancePrivateIP string            `yaml:"container_instance_private_ip"`
+	MetricsPath                string            `yaml:"__metrics_path__,omitempty"`
+	CustomLabels               map[string]string `yaml:",inline,omitempty"`
 }
 
 // Docker label for enabling dynamic port detection
@@ -333,9 +333,9 @@ func (t *AugmentedTask) ExporterInformation() []*PrometheusTaskInfo {
 			}
 		}
 
-		privateIpAddress := ""
+		containerInstancePrivateIpAddress := ""
 		if t.EC2Instance != nil && t.EC2Instance.PrivateIpAddress != nil {
-			privateIpAddress = *t.EC2Instance.PrivateIpAddress
+			containerInstancePrivateIpAddress = *t.EC2Instance.PrivateIpAddress
 		}
 
 		availabilityZone := ""
@@ -344,18 +344,18 @@ func (t *AugmentedTask) ExporterInformation() []*PrometheusTaskInfo {
 		}
 
 		l := labels{
-			TaskArn:           *t.TaskArn,
-			TaskName:          *t.TaskDefinition.Family,
-			JobName:           d.DockerLabels[*prometheusJobNameLabel],
-			TaskRevision:      fmt.Sprintf("%d", *t.TaskDefinition.Revision),
-			TaskGroup:         *t.Group,
-			ClusterArn:        *t.ClusterArn,
-			ContainerName:     *i.Name,
-			ContainerArn:      *i.ContainerArn,
-			DockerImage:       *d.Image,
-			InstancePrivateIP: privateIpAddress,
-			AvailabilityZone:  availabilityZone,
-			CustomLabels:      m,
+			TaskArn:                    *t.TaskArn,
+			TaskName:                   *t.TaskDefinition.Family,
+			JobName:                    d.DockerLabels[*prometheusJobNameLabel],
+			TaskRevision:               fmt.Sprintf("%d", *t.TaskDefinition.Revision),
+			TaskGroup:                  *t.Group,
+			ClusterArn:                 *t.ClusterArn,
+			ContainerName:              *i.Name,
+			ContainerArn:               *i.ContainerArn,
+			DockerImage:                *d.Image,
+			ContainerInstancePrivateIP: containerInstancePrivateIpAddress,
+			AvailabilityZone:           availabilityZone,
+			CustomLabels:               m,
 		}
 
 		exporterPath, ok = d.DockerLabels[*prometheusPathLabel]
